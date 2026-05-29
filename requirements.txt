@@ -1,0 +1,6 @@
+# O projeto usa apenas biblioteca padrão do Python.
+# Dependências externas de sistema necessárias em runtime:
+# - apktool
+# - Java JDK: keytool/jarsigner
+# - Android build-tools: apksigner e zipalign, recomendado
+# - adb, opcional para instalar o APK

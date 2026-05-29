@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+workspace/
+outputs/
+downloads/
+*.apk
+*.idsig
+.DS_Store
+
+# Rascunhos locais (não publicar)
+docs/
+
+# Imagens geradas são versionadas (README); não ignorar assets/img/
+
