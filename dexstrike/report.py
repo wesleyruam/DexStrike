@@ -80,26 +80,32 @@ def generate_report(state: AppState) -> Path:
         "",
         "## Notas úteis",
         "",
-        "Gadget em modo listen na porta 27042. Forma confiável (funciona em "
-        "emulador adb-TCP e em USB) — forward + `-H`:",
+        "Gadget em modo listen na porta 27042. Forma padrão (tunelada pelo adb, "
+        "funciona em USB e emulador):",
+        "",
+        "```bash",
+        "frida -U Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
+        "```",
+        "",
+        "Ou o bundle único:",
+        "",
+        "```bash",
+        "frida -U Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
+        "```",
+        "",
+        "Fallback (só se o `-U` não achar o device) — forward + `-H` com `-n` "
+        "(attach; alvo posicional dá `Failed to spawn`):",
         "",
         "```bash",
         "adb forward tcp:27042 tcp:27042",
         "frida -H 127.0.0.1:27042 -n Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
         "```",
         "",
-        "Ou o bundle único:",
-        "",
-        "```bash",
-        "frida -H 127.0.0.1:27042 -n Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
-        "```",
-        "",
-        "Use sempre `-n` (attach): o Gadget vive dentro de um app já em execução e "
-        "não pode ser spawnado — alvo posicional dá `Failed to spawn`. "
-        "Em dispositivo USB físico, `frida -U Gadget -l ...` também funciona. "
-        "Em emulador conectado via `adb connect`, prefira o `-H` acima — o `-U` "
-        "não enxerga o device. A versão do Frida CLI precisa bater com a do Gadget "
-        f"(`{state.frida_version}`): `pip install --user 'frida=={state.frida_version}'`.",
+        "O `-H` usa um helper local que falha em sistemas com `ptrace_scope=1` "
+        "(erro de portal ao abrir `/proc/<pid>/root`); nesse caso rode "
+        "`sudo sysctl kernel.yama.ptrace_scope=0` ou use o `-U`. A versão do Frida "
+        f"CLI precisa bater com a do Gadget (`{state.frida_version}`): "
+        f"`pip install --user 'frida=={state.frida_version}'`.",
         "",
     ])
 

@@ -49,12 +49,22 @@ def warn_on_version_mismatch(state: AppState) -> None:
 def gadget_connect_hint(scripts: str = "-l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js") -> str:
     """Comando recomendado para conectar no Gadget em modo listen.
 
-    Usa forward + ``-H`` (funciona em emulador adb-TCP e em USB), pois ``frida -U``
-    falha em emuladores conectados via ``adb connect`` (não aparecem como device USB).
+    Usa ``frida -U`` (tunelado pelo adb): é o caminho padrão e funciona em
+    dispositivo USB e em emulador adb. Evita o backend de socket ``-H``, cujo
+    helper local falha em sistemas com ``ptrace_scope=1`` (erro de portal ao
+    abrir ``/proc/<pid>/root``).
     """
-    # -n (attach por nome), NÃO posicional: o Gadget é embarcado num app já em
-    # execução e só pode ser atachado; passar o alvo posicional faz o frida tentar
-    # SPAWN e falhar com "Failed to spawn".
+    return f"frida -U Gadget {scripts}"
+
+
+def gadget_connect_hint_remote(scripts: str = "-l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js") -> str:
+    """Fallback via forward + ``-H`` para quando ``frida -U`` não acha o device.
+
+    Usa ``-n`` (attach por nome): o Gadget vive num app já em execução e só pode
+    ser atachado — alvo posicional faz o frida tentar SPAWN e falhar. Em sistemas
+    com ``ptrace_scope=1`` o helper local do ``-H`` falha; rode antes
+    ``sudo sysctl kernel.yama.ptrace_scope=0`` ou prefira o ``-U``.
+    """
     return (
         f"adb forward tcp:{GADGET_PORT} tcp:{GADGET_PORT} && "
         f"frida -H 127.0.0.1:{GADGET_PORT} -n Gadget {scripts}"
@@ -227,5 +237,5 @@ def copy_frida_scripts(state: AppState) -> None:
 
     state.log_patch("Scripts Frida copiados para `outputs/frida-scripts` e `assets/frida` dentro do APK descompilado")
     state.note("Gadget em modo listen. Conecte com: `" + gadget_connect_hint() + "`")
-    state.note("Em emulador (adb-TCP) o `frida -U` não acha o device; use o forward + `-H` acima.")
+    state.note("Se o `-U` não achar o device, fallback: `" + gadget_connect_hint_remote() + "`")
     print_ok("Scripts Frida copiados e bundle gerado.")
