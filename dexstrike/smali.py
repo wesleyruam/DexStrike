@@ -179,6 +179,99 @@ def inject_frida_load_library(state: AppState) -> Path:
     raise ToolError("Não consegui localizar arquivo smali alvo. Tentativas: " + ", ".join(attempted))
 
 
+_VOID_METHOD_RE = re.compile(r"^\.method\s+.*?\b([A-Za-z_$][\w$]*)\([^)]*\)V\s*$")
+
+
+def _void_method_name(line: str) -> str | None:
+    match = _VOID_METHOD_RE.match(line.strip())
+    return match.group(1) if match else None
+
+
+def _method_end(lines: list[str], start: int) -> int:
+    for j in range(start + 1, len(lines)):
+        if lines[j].strip() == ".end method":
+            return j
+    raise ToolError("Método sem .end method correspondente.")
+
+
+def _body_insertion_index(lines: list[str], start: int, end: int) -> int | None:
+    """Índice da primeira instrução executável, pulando diretivas de cabeçalho.
+
+    Pula ``.locals``/``.registers``, blocos ``.annotation``/``.param`` e
+    ``.prologue``/linhas em branco, de modo que um ``return-void`` inserido fique
+    válido (depois dos metadados do método e antes do código).
+    """
+    seen_regs = False
+    i = start + 1
+    while i < end:
+        stripped = lines[i].strip()
+        if stripped.startswith(".locals") or stripped.startswith(".registers"):
+            seen_regs = True
+            i += 1
+        elif stripped.startswith(".annotation"):
+            while i < end and lines[i].strip() != ".end annotation":
+                i += 1
+            i += 1
+        elif stripped.startswith(".param"):
+            # Forma em bloco termina com `.end param`; one-liner não.
+            j = i + 1
+            is_block = False
+            while j < end:
+                sj = lines[j].strip()
+                if sj == ".end param":
+                    is_block = True
+                    break
+                if sj and not sj.startswith(".annotation") and not sj.startswith(".end annotation"):
+                    break
+                j += 1
+            i = j + 1 if is_block else i + 1
+        elif stripped == "" or stripped.startswith(".prologue"):
+            i += 1
+        else:
+            break
+    if not seen_regs:
+        return None
+    return i
+
+
+def neuter_void_method(lines: list[str], start: int, end: int) -> bool:
+    """Insere ``return-void`` no início do corpo do método (no-op). Idempotente."""
+    insert_at = _body_insertion_index(lines, start, end)
+    if insert_at is None:
+        return False
+    if lines[insert_at].strip() == "return-void":
+        return False
+    lines[insert_at:insert_at] = ["    return-void"]
+    return True
+
+
+def neuter_methods(smali_file: Path, name_regex: str) -> list[str]:
+    """Transforma em no-op todos os métodos ``void`` cujo nome casa ``name_regex``.
+
+    Retorna os nomes efetivamente neutralizados (vazio se nada mudou).
+    """
+    text = smali_file.read_text(encoding="utf-8", errors="ignore")
+    lines = text.splitlines()
+    pattern = re.compile(name_regex)
+
+    neutered: list[str] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith(".method"):
+            end = _method_end(lines, i)
+            name = _void_method_name(lines[i])
+            if name and pattern.match(name) and neuter_void_method(lines, i, end):
+                neutered.append(name)
+                end = _method_end(lines, i)  # recalcula após inserir a linha
+            i = end + 1
+        else:
+            i += 1
+
+    if neutered:
+        smali_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return neutered
+
+
 def show_injection_targets(state: AppState) -> None:
     if not state.decoded_dir:
         print_warn("Descompile o APK primeiro.")

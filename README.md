@@ -126,6 +126,32 @@ Fluxo mais rápido no menu:
 O menu também permite rodar cada etapa isoladamente (descompilar, patch de Manifest,
 detecção, injeção do Gadget, smali, rebuild, assinatura, instalação e relatório).
 
+### App bundles (splits) e License Check
+
+Para apps distribuídos como Android App Bundle (`base.apk` + `split_config.*.apk`)
+e/ou protegidos por **PairIP License Check** (Google Play):
+
+```text
+14) Detectar proteções de licença/anti-tamper (PairIP/LVL)
+15) Bypass de License Check (PairIP) no smali
+16) Verificar assinatura + assinar splits + install-multiple
+```
+
+- **14** detecta PairIP License Check, PairIP VM Protection (nativa) e Google Play
+  Licensing (LVL) varrendo a árvore descompilada. A detecção também é exibida na
+  opção 4 e no pipeline completo.
+- **15** neutraliza o License Check do PairIP transformando os métodos
+  `start*Activity` de `LicenseClient` em no-op (`return-void`) — assim o paywall
+  (redirect para a Play Store) e o dialog de erro nunca sobem, sem mexer na
+  validação de assinatura do payload. Idempotente.
+- **16** localiza os splits ao lado do base, **verifica se todos compartilham o
+  mesmo certificado** (requisito do `adb install-multiple`), assina base patcheado
+  + splits com a mesma keystore em `outputs/signed/` e instala o conjunto.
+
+O pipeline completo (10) integra os três passos: oferece o bypass quando detecta
+proteção com bypass automático e, ao final, oferece assinar/instalar o conjunto de
+splits via `install-multiple`.
+
 ## Estrutura do projeto
 
 ```text
@@ -137,8 +163,10 @@ DexStrike/
 │   ├── manifest.py          # patches de Manifest (namespaces preservados)
 │   ├── detector.py          # ABIs, frameworks, libs e components
 │   ├── frida.py             # download e injeção do Frida Gadget
-│   ├── smali.py             # injeção de loadLibrary no smali
-│   ├── signer.py            # zipalign + apksigner/jarsigner
+│   ├── smali.py             # injeção de loadLibrary + neutralização de métodos
+│   ├── signer.py            # zipalign + apksigner/jarsigner + cert SHA-256
+│   ├── license_check.py     # detecção/bypass de License Check (PairIP/LVL)
+│   ├── splits.py            # verificação de assinatura + sign + install-multiple
 │   ├── device.py            # adb install
 │   ├── report.py            # relatório em Markdown
 │   ├── state.py / utils.py  # estado e utilitários

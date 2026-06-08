@@ -47,9 +47,29 @@ def generate_report(state: AppState) -> Path:
         f"- ABIs detectadas: `{', '.join(state.detected_abis) if state.detected_abis else 'nenhuma'}`",
         f"- ABIs selecionadas: `{', '.join(state.selected_abis) if state.selected_abis else 'nenhuma'}`",
         "",
-        "## Patches aplicados",
+        "## Proteções de licença / anti-tamper",
+        "",
+        f"- Detectadas: `{', '.join(state.detected_protections) if state.detected_protections else 'nenhuma'}`",
+        "",
+        "## Splits / install-multiple",
         "",
     ]
+
+    if state.signed_split_apks:
+        lines.append("Conjunto assinado com a mesma keystore (instale com `adb install-multiple`):")
+        lines.append("")
+        lines.extend([f"- `{apk}`" for apk in state.signed_split_apks])
+        lines.append("")
+        lines.append("```bash")
+        lines.append("adb install-multiple -r " + " ".join(str(apk) for apk in state.signed_split_apks))
+        lines.append("```")
+    else:
+        lines.append("- Nenhum conjunto de splits assinado nesta sessão.")
+    lines.extend([
+        "",
+        "## Patches aplicados",
+        "",
+    ])
 
     if state.patch_log:
         lines.extend([f"- {item}" for item in state.patch_log])
