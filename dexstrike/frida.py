@@ -3,13 +3,59 @@ from __future__ import annotations
 import json
 import lzma
 import shutil
+import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
 
 from dexstrike.detector import KNOWN_ABIS, detect_abis
 from dexstrike.state import AppState
-from dexstrike.utils import ToolError, copy_file, ensure_dir, print_info, print_ok, print_warn
+from dexstrike.utils import ToolError, copy_file, ensure_dir, print_info, print_ok, print_warn, which
+
+GADGET_PORT = 27042
+
+
+def installed_frida_version() -> str | None:
+    """Retorna a versão do ``frida`` CLI instalado, ou None se ausente."""
+    exe = which("frida")
+    if not exe:
+        return None
+    try:
+        result = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (result.stdout or "").strip()
+    return out or None
+
+
+def warn_on_version_mismatch(state: AppState) -> None:
+    """Avisa se o Frida CLI instalado difere da versão do Gadget a injetar.
+
+    Um mismatch de versão entre CLI e Gadget faz o attach falhar. O Gadget já
+    está sendo injetado nesta versão, então a correção mais leve é alinhar o CLI.
+    """
+    cli = installed_frida_version()
+    if cli and cli != state.frida_version:
+        print_warn(
+            f"Frida CLI instalado é {cli}, mas o Gadget é {state.frida_version} — versões "
+            "precisam bater para conectar."
+        )
+        print_warn(
+            f"Alinhe com: pip install --user 'frida=={state.frida_version}'  "
+            f"(ou configure a versão do Gadget para {cli} na opção 1 antes de injetar)."
+        )
+
+
+def gadget_connect_hint(scripts: str = "-l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js") -> str:
+    """Comando recomendado para conectar no Gadget em modo listen.
+
+    Usa forward + ``-H`` (funciona em emulador adb-TCP e em USB), pois ``frida -U``
+    falha em emuladores conectados via ``adb connect`` (não aparecem como device USB).
+    """
+    return (
+        f"adb forward tcp:{GADGET_PORT} tcp:{GADGET_PORT} && "
+        f"frida -H 127.0.0.1:{GADGET_PORT} Gadget {scripts}"
+    )
 
 FRIDA_PLATFORM_BY_ABI = {
     "armeabi-v7a": "android-arm",
@@ -128,6 +174,8 @@ def inject_frida_gadget(state: AppState, *, abis: list[str] | None = None, write
     if not abis:
         raise ToolError("Nenhuma ABI selecionada para injeção do Frida Gadget.")
 
+    warn_on_version_mismatch(state)
+
     installed: list[Path] = []
     for abi in abis:
         if abi not in FRIDA_PLATFORM_BY_ABI:
@@ -175,5 +223,6 @@ def copy_frida_scripts(state: AppState) -> None:
     )
 
     state.log_patch("Scripts Frida copiados para `outputs/frida-scripts` e `assets/frida` dentro do APK descompilado")
-    state.note("Gadget em modo listen: `frida -U Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js` (ou os dois scripts com -l config.js -l android-certificate-unpinning.js)")
+    state.note("Gadget em modo listen. Conecte com: `" + gadget_connect_hint() + "`")
+    state.note("Em emulador (adb-TCP) o `frida -U` não acha o device; use o forward + `-H` acima.")
     print_ok("Scripts Frida copiados e bundle gerado.")

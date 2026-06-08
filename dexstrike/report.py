@@ -80,17 +80,24 @@ def generate_report(state: AppState) -> Path:
         "",
         "## Notas úteis",
         "",
-        "Conectando no Gadget em modo listen, normalmente você pode usar algo como:",
+        "Gadget em modo listen na porta 27042. Forma confiável (funciona em "
+        "emulador adb-TCP e em USB) — forward + `-H`:",
         "",
         "```bash",
-        "frida -U Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
+        "adb forward tcp:27042 tcp:27042",
+        "frida -H 127.0.0.1:27042 Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
         "```",
         "",
-        "Ou carregar o bundle único:",
+        "Ou o bundle único:",
         "",
         "```bash",
-        "frida -U Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
+        "frida -H 127.0.0.1:27042 Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
         "```",
+        "",
+        "Em dispositivo USB físico, `frida -U Gadget -l ...` também funciona. "
+        "Em emulador conectado via `adb connect`, prefira o `-H` acima — o `-U` "
+        "não enxerga o device. A versão do Frida CLI precisa bater com a do Gadget "
+        f"(`{state.frida_version}`): `pip install --user 'frida=={state.frida_version}'`.",
         "",
     ])
 

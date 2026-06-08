@@ -5,6 +5,13 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 ## [Não lançado]
 
 ### Corrigido
+- **Orientação do Frida em emulador (`frida.py`, `report.py`):** o relatório e as
+  notas mandavam `frida -U Gadget -l ...`, que trava em emulador conectado via
+  `adb connect` (não aparece como device USB). Agora recomendam `adb forward` +
+  `frida -H 127.0.0.1:27042 Gadget -l ...`, que funciona em emulador adb-TCP e em USB.
+- **Mismatch de versão Frida (`frida.py`):** ao injetar o Gadget, avisa quando a
+  versão do Frida CLI instalado difere da versão do Gadget (causa attach falhar) e
+  mostra o `pip install` para alinhar.
 - **Keystore relativa ao CWD (`state.py`):** o caminho padrão da keystore era
   `resources/key.jks` resolvido contra o diretório atual, então rodar a ferramenta
   de fora do repo dava `Keystore não encontrado`. Agora o padrão aponta para a
