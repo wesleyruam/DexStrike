@@ -52,9 +52,12 @@ def gadget_connect_hint(scripts: str = "-l outputs/frida-scripts/config.js -l ou
     Usa forward + ``-H`` (funciona em emulador adb-TCP e em USB), pois ``frida -U``
     falha em emuladores conectados via ``adb connect`` (não aparecem como device USB).
     """
+    # -n (attach por nome), NÃO posicional: o Gadget é embarcado num app já em
+    # execução e só pode ser atachado; passar o alvo posicional faz o frida tentar
+    # SPAWN e falhar com "Failed to spawn".
     return (
         f"adb forward tcp:{GADGET_PORT} tcp:{GADGET_PORT} && "
-        f"frida -H 127.0.0.1:{GADGET_PORT} Gadget {scripts}"
+        f"frida -H 127.0.0.1:{GADGET_PORT} -n Gadget {scripts}"
     )
 
 FRIDA_PLATFORM_BY_ABI = {

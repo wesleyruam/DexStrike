@@ -85,15 +85,17 @@ def generate_report(state: AppState) -> Path:
         "",
         "```bash",
         "adb forward tcp:27042 tcp:27042",
-        "frida -H 127.0.0.1:27042 Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
+        "frida -H 127.0.0.1:27042 -n Gadget -l outputs/frida-scripts/config.js -l outputs/frida-scripts/android-certificate-unpinning.js",
         "```",
         "",
         "Ou o bundle único:",
         "",
         "```bash",
-        "frida -H 127.0.0.1:27042 Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
+        "frida -H 127.0.0.1:27042 -n Gadget -l outputs/frida-scripts/ssl-unpinning-bundle.js",
         "```",
         "",
+        "Use sempre `-n` (attach): o Gadget vive dentro de um app já em execução e "
+        "não pode ser spawnado — alvo posicional dá `Failed to spawn`. "
         "Em dispositivo USB físico, `frida -U Gadget -l ...` também funciona. "
         "Em emulador conectado via `adb connect`, prefira o `-H` acima — o `-U` "
         "não enxerga o device. A versão do Frida CLI precisa bater com a do Gadget "
