@@ -4,6 +4,21 @@ Formato baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/).
 
 ## [Não lançado]
 
+### Adicionado
+- **Gadget em modo `script` (autoload) (`frida.py`, opção 5):** além do modo `listen`,
+  o Gadget pode ser injetado em modo `script` — embute `config.js` +
+  `android-certificate-unpinning.js` como `libfridascript.so` ao lado do Gadget e o
+  configura para rodar o unpinning **sozinho no boot** do app (sem `frida -U`). Pergunta
+  a CA do proxy (PEM ou DER, ex.: Burp) e `PROXY_HOST/PORT` e crava no `config.js`.
+  Novos helpers `render_config_js`, `build_unpinning_bundle`, `load_ca_pem`.
+- **Validação por etapa:** `pull` valida cada APK (não-vazio, zip válido); a injeção do
+  Gadget valida `.so`/config/script presentes; `build`/`sign` validam o APK gerado.
+  Helpers `check`/`require_check`/`is_zip`/`human_size` em `utils.py`.
+
+### Alterado
+- **Opção 7 (Copiar scripts Frida) removida:** virou parte da injeção do Gadget em modo
+  `script`. Menu renumerado (pipeline 10→9, splits 16→15, adb pull 17→16, etc.).
+
 ### Corrigido
 - **Orientação do Frida em emulador (`frida.py`, `report.py`):** o relatório e as
   notas mandavam `frida -U Gadget -l ...`, que trava em emulador conectado via

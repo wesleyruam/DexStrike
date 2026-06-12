@@ -5,7 +5,10 @@ from pathlib import Path
 from dexstrike.state import AppState
 from dexstrike.utils import (
     ToolError,
+    check,
     ensure_dir,
+    human_size,
+    is_zip,
     print_info,
     print_ok,
     print_warn,
@@ -65,6 +68,7 @@ def pull_package(state: AppState, package: str, dest_dir: Path) -> Path:
         local_name = "base.apk" if is_base else remote_name
         dest = dest_dir / local_name
         run_cmd(["adb", "pull", remote, str(dest)])
+        _validate_pulled(dest)
         if is_base and local_base is None:
             local_base = dest
         else:
@@ -82,9 +86,26 @@ def pull_package(state: AppState, package: str, dest_dir: Path) -> Path:
     state.apk_path = local_base
     state.project_dir = local_base.parent
     state.refresh_paths()
-    print_ok(f"Base salvo em: {local_base}")
+
+    # --- Validação final do conjunto ---
+    print_info("Validação do conjunto baixado:")
+    ok = check(local_base.exists() and is_zip(local_base),
+               f"base.apk OK ({human_size(local_base.stat().st_size)})",
+               "base.apk ausente ou não é um APK válido")
+    for sp in splits:
+        ok = check(sp.exists() and is_zip(sp),
+                   f"{sp.name} OK ({human_size(sp.stat().st_size)})",
+                   f"{sp.name} inválido") and ok
     if splits:
-        print_ok(f"{len(splits)} split(s) baixado(s): " + ", ".join(s.name for s in splits))
+        print_ok(f"{len(splits)} split(s) baixado(s) + base.")
     else:
         print_warn("Nenhum split encontrado — app de APK único.")
+    if not ok:
+        raise ToolError("Algum APK baixou corrompido. Refaça o pull.")
     return local_base
+
+
+def _validate_pulled(path: Path) -> None:
+    """Confere que o ``adb pull`` trouxe um arquivo não-vazio."""
+    if not path.exists() or path.stat().st_size == 0:
+        raise ToolError(f"Falha no adb pull: {path.name} não foi baixado (vazio/ausente).")

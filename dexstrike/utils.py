@@ -93,6 +93,39 @@ def copy_file(src: Path, dst: Path) -> None:
     shutil.copy2(src, dst)
 
 
+def is_zip(path: Path) -> bool:
+    """True se ``path`` começa com a assinatura de um zip/APK (``PK\\x03\\x04``)."""
+    try:
+        with open(path, "rb") as fh:
+            return fh.read(4) == b"PK\x03\x04"
+    except OSError:
+        return False
+
+
+def check(ok: bool, ok_msg: str, fail_msg: str) -> bool:
+    """Valida uma etapa: imprime ✓/✗ e retorna o booleano para encadear checagens."""
+    if ok:
+        print(f"[✓] {ok_msg}")
+    else:
+        print_warn(f"✗ {fail_msg}")
+    return ok
+
+
+def require_check(ok: bool, ok_msg: str, fail_msg: str) -> None:
+    """Como ``check``, mas levanta ``ToolError`` se falhar (aborta a etapa)."""
+    if not check(ok, ok_msg, fail_msg):
+        raise ToolError(fail_msg)
+
+
+def human_size(num: int) -> str:
+    value = float(num)
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}GB"
+
+
 def relative_to_cwd(path: Path) -> str:
     try:
         return str(path.resolve().relative_to(Path.cwd().resolve()))

@@ -6,7 +6,7 @@ from pathlib import Path
 from dexstrike.apktool import build_apk, decompile_apk
 from dexstrike.detector import KNOWN_ABIS, run_detection
 from dexstrike.device import adb_install
-from dexstrike.frida import choose_abis_interactive, copy_frida_scripts, inject_frida_gadget
+from dexstrike.frida import choose_abis_interactive, inject_frida_gadget, load_ca_pem
 from dexstrike.license_check import apply_license_bypass, report_license_protections
 from dexstrike.manifest import (
     ensure_network_security_config,
@@ -25,7 +25,19 @@ from dexstrike.splits import (
     verify_set_signature,
 )
 from dexstrike.state import PROJECT_FILENAME, AppState
-from dexstrike.utils import ToolError, ask, ask_yes_no, ensure_dir, print_header, print_info, print_ok, print_warn
+from dexstrike.utils import (
+    ToolError,
+    ask,
+    ask_yes_no,
+    check,
+    ensure_dir,
+    human_size,
+    is_zip,
+    print_header,
+    print_info,
+    print_ok,
+    print_warn,
+)
 
 
 class MenuApp:
@@ -67,26 +79,24 @@ class MenuApp:
                 elif choice == "6":
                     self.inject_load_library()
                 elif choice == "7":
-                    self.copy_scripts()
-                elif choice == "8":
                     self.build()
-                elif choice == "9":
+                elif choice == "8":
                     self.sign()
-                elif choice == "10":
+                elif choice == "9":
                     self.full_pipeline()
-                elif choice == "11":
+                elif choice == "10":
                     self.install()
-                elif choice == "12":
+                elif choice == "11":
                     self.report()
-                elif choice == "13":
+                elif choice == "12":
                     show_injection_targets(self.state)
-                elif choice == "14":
+                elif choice == "13":
                     self.detect_protections()
-                elif choice == "15":
+                elif choice == "14":
                     self.bypass_license_check()
-                elif choice == "16":
+                elif choice == "15":
                     self.split_sign_install()
-                elif choice == "17":
+                elif choice == "16":
                     self.pull_from_device()
                 elif choice == "0":
                     print_ok("Saindo.")
@@ -120,19 +130,18 @@ class MenuApp:
         print("    - usesCleartextTraffic=true opcional")
         print("    - debuggable=true opcional")
         print(" 4) Detectar ABIs/frameworks/libs/components")
-        print(" 5) Baixar e injetar Frida Gadget")
+        print(" 5) Baixar e injetar Frida Gadget (listen OU script/autoload)")
         print(" 6) Injetar System.loadLibrary('frida-gadget') no smali")
-        print(" 7) Copiar scripts Frida SSL/unpinning")
-        print(" 8) Rebuild com apktool")
-        print(" 9) Zipalign + assinar APK")
-        print("10) Rodar pipeline completo recomendado")
-        print("11) Instalar APK assinado via adb")
-        print("12) Gerar relatório")
-        print("13) Mostrar alvos de injeção detectados")
-        print("14) Detectar proteções de licença/anti-tamper (PairIP/LVL)")
-        print("15) Bypass de License Check (PairIP) no smali")
-        print("16) Verificar assinatura + assinar splits + install-multiple")
-        print("17) Baixar APK base + splits do device (adb pull)")
+        print(" 7) Rebuild com apktool")
+        print(" 8) Zipalign + assinar APK")
+        print(" 9) Rodar pipeline completo recomendado")
+        print("10) Instalar APK assinado via adb")
+        print("11) Gerar relatório")
+        print("12) Mostrar alvos de injeção detectados")
+        print("13) Detectar proteções de licença/anti-tamper (PairIP/LVL)")
+        print("14) Bypass de License Check (PairIP) no smali")
+        print("15) Verificar assinatura + assinar splits + install-multiple")
+        print("16) Baixar APK base + splits do device (adb pull)")
         print(" 0) Sair")
 
     def configure_project(self) -> None:
@@ -282,7 +291,7 @@ class MenuApp:
         dest = Path(ask("Pasta de destino do projeto", dest_default)).expanduser()
         pull_package(self.state, package, dest)
         self._save_project()
-        print_ok("Projeto pronto. Use a opção 16 para assinar o conjunto e instalar.")
+        print_ok("Projeto pronto. Use a opção 15 para assinar o conjunto e instalar.")
 
     def inject_frida_gadget_menu(self) -> None:
         self._ensure_decoded()
@@ -290,25 +299,56 @@ class MenuApp:
             run_detection(self.state)
         abis = choose_abis_interactive(self.state.detected_abis)
         self.state.selected_abis = abis
-        inject_frida_gadget(self.state, abis=abis, write_config=True)
+        opts = self._ask_gadget_mode()
+        inject_frida_gadget(self.state, abis=abis, **opts)
+
+    def _ask_gadget_mode(self) -> dict:
+        """Pergunta o modo do gadget. No modo script, coleta CA do proxy + host/porta
+        para embutir o unpinning que roda sozinho no boot."""
+        print_info("Modo do Gadget:")
+        print("  1) listen  — conectar depois com `frida -U Gadget -l ...`")
+        print("  2) script  — embute o unpinning (autoload no boot, sem frida -U)")
+        raw = ask("Escolha o modo", "1")
+        if raw.strip() != "2":
+            return {"mode": "listen"}
+
+        ca_pem = None
+        ca_path = ask("Caminho da CA do proxy (PEM ou DER) — enter p/ usar a de exemplo", "")
+        if ca_path:
+            ca_pem = load_ca_pem(Path(ca_path).expanduser())
+            print_ok("CA carregada e será cravada no config.js.")
+        else:
+            print_warn("Sem CA: o proxy precisará usar a CA de exemplo do PortSwigger.")
+        proxy_host = ask("PROXY_HOST", "127.0.0.1")
+        proxy_port = int(ask("PROXY_PORT", "8080") or "8080")
+        debug = ask_yes_no("DEBUG_MODE no script (logs no logcat)?", default=False)
+        return {
+            "mode": "script",
+            "ca_pem": ca_pem,
+            "proxy_host": proxy_host,
+            "proxy_port": proxy_port,
+            "debug": debug,
+        }
 
     def inject_load_library(self) -> None:
         self._ensure_decoded()
         inject_frida_load_library(self.state)
 
-    def copy_scripts(self) -> None:
-        self._ensure_decoded()
-        copy_frida_scripts(self.state)
-
     def build(self) -> None:
         self._ensure_decoded()
-        build_apk(self.state)
+        out = build_apk(self.state)
+        check(out.exists() and is_zip(out),
+              f"APK recompilado OK ({human_size(out.stat().st_size)})",
+              "Rebuild não gerou um APK válido — veja os erros do apktool acima.")
 
     def sign(self) -> None:
         if not self.state.unsigned_apk or not self.state.unsigned_apk.exists():
             raise ToolError("Faça o rebuild primeiro.")
         zipalign_apk(self.state)
-        sign_apk(self.state)
+        signed = sign_apk(self.state)
+        check(signed.exists() and is_zip(signed),
+              "APK assinado e verificado.",
+              "Assinatura não gerou APK válido.")
 
     def install(self) -> None:
         adb_install(self.state, replace=True)
@@ -319,7 +359,7 @@ class MenuApp:
     def full_pipeline(self) -> None:
         self._ensure_apk()
         print_header("Pipeline completo recomendado")
-        print_info("Etapas: decompile -> Manifest -> detect -> Frida Gadget -> smali -> scripts -> build -> zipalign/sign -> report")
+        print_info("Etapas: decompile -> Manifest -> detect -> Frida Gadget (listen/script) -> smali -> build -> zipalign/sign -> report")
 
         force = ask_yes_no("Apagar pasta descompilada existente se houver?", default=True)
         decompile_apk(self.state, force=force)
@@ -345,9 +385,9 @@ class MenuApp:
         ):
             apply_license_bypass(self.state)
 
-        inject_frida_gadget(self.state, abis=abis, write_config=True)
+        gadget_opts = self._ask_gadget_mode()
+        inject_frida_gadget(self.state, abis=abis, **gadget_opts)
         inject_frida_load_library(self.state)
-        copy_frida_scripts(self.state)
         build_apk(self.state)
         zipalign_apk(self.state)
         sign_apk(self.state)

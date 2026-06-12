@@ -47,11 +47,14 @@ Um único menu interativo cobre o fluxo de patch que normalmente é feito à mã
   `usesCleartextTraffic` e `debuggable` (opcionais), preservando todos os namespaces XML;
 - 🔍 **Detecta** ABIs nativas, frameworks (React Native, Flutter, Unity, Cordova, Xamarin),
   libs de rede/segurança (OkHttp, Retrofit, Cronet, TrustKit, RootBeer) e componentes do Manifest;
-- 📦 **Baixa o Frida Gadget** correto para cada ABID e o injeta em `lib/<abi>/`;
+- 📥 **Baixa o app do device** (base + splits) via `adb pull`, com validação de cada APK;
+- 📦 **Baixa o Frida Gadget** correto para cada ABI e o injeta em `lib/<abi>/`, em modo
+  **`listen`** (`frida -U`) ou **`script`** — que **embute os scripts de SSL unpinning**
+  (baseados no [frida-interception-and-unpinning](https://github.com/httptoolkit/frida-interception-and-unpinning))
+  para rodarem **sozinhos no boot**, com a CA do proxy e host/porta cravados;
 - 🧬 **Injeta `System.loadLibrary("frida-gadget")`** no smali da classe `Application` ou da
   Activity de `LAUNCHER`, de forma **idempotente** (não duplica a injeção);
-- 🔓 **Copia scripts Frida** de SSL unpinning (baseados no
-  [frida-interception-and-unpinning](https://github.com/httptoolkit/frida-interception-and-unpinning));
+- ✅ **Valida cada etapa** (pull, injeção, rebuild, assinatura) com checagens ✓/✗;
 - 🔨 **Recompila**, faz **zipalign** e **assina** com `apksigner` (ou `jarsigner` como fallback);
 - 📄 **Gera um relatório** em Markdown com tudo que foi feito.
 
@@ -63,7 +66,7 @@ Escrita **somente com a biblioteca padrão do Python** — sem dependências de 
 
 ![Execução do pipeline completo](assets/img/terminal.png)
 
-<sub>Exemplo de execução do pipeline completo (opção 10 do menu).</sub>
+<sub>Exemplo de execução do pipeline completo (opção 9 do menu).</sub>
 
 </div>
 
@@ -119,12 +122,31 @@ python3 main.py     # ou ./scripts/run.sh
 Fluxo mais rápido no menu:
 
 ```text
- 1) Configurar APK/keystore/versão do Frida
-10) Rodar pipeline completo recomendado
+16) Baixar APK base + splits do device (adb pull)   # ou 1) configurar um APK local
+ 9) Rodar pipeline completo recomendado
 ```
 
 O menu também permite rodar cada etapa isoladamente (descompilar, patch de Manifest,
 detecção, injeção do Gadget, smali, rebuild, assinatura, instalação e relatório).
+
+### Baixar o app do device (adb pull)
+
+A opção **16** lista os pacotes de terceiros (`pm list packages -3`), resolve o base
++ splits via `pm path <pkg>`, baixa tudo com `adb pull` para uma pasta de projeto e
+**valida** cada APK (não-vazio, zip válido) — já deixando o `dexstrike.json` pronto.
+
+### Injeção do Gadget: modo `listen` vs `script`
+
+A opção **5** pergunta o modo do Frida Gadget:
+
+- **`listen`** — o Gadget escuta na `27042`; você conecta depois com
+  `frida -U Gadget -l outputs/frida-scripts/...`.
+- **`script`** — embute `config.js` + `android-certificate-unpinning.js` como
+  `libfridascript.so` ao lado do Gadget e o configura para **rodar o script sozinho
+  no boot** do app (SSL unpinning + redirect pro proxy, **sem `frida -U`**). Pergunta
+  a **CA do proxy** (PEM ou DER, ex.: a do Burp) e `PROXY_HOST/PORT` e crava no
+  `config.js`. Lembre do `adb reverse tcp:<port> tcp:<port>` para o device alcançar
+  o seu proxy.
 
 ### App bundles (splits) e License Check
 
@@ -132,23 +154,23 @@ Para apps distribuídos como Android App Bundle (`base.apk` + `split_config.*.ap
 e/ou protegidos por **PairIP License Check** (Google Play):
 
 ```text
-14) Detectar proteções de licença/anti-tamper (PairIP/LVL)
-15) Bypass de License Check (PairIP) no smali
-16) Verificar assinatura + assinar splits + install-multiple
+13) Detectar proteções de licença/anti-tamper (PairIP/LVL)
+14) Bypass de License Check (PairIP) no smali
+15) Verificar assinatura + assinar splits + install-multiple
 ```
 
-- **14** detecta PairIP License Check, PairIP VM Protection (nativa) e Google Play
+- **13** detecta PairIP License Check, PairIP VM Protection (nativa) e Google Play
   Licensing (LVL) varrendo a árvore descompilada. A detecção também é exibida na
   opção 4 e no pipeline completo.
-- **15** neutraliza o License Check do PairIP transformando os métodos
+- **14** neutraliza o License Check do PairIP transformando os métodos
   `start*Activity` de `LicenseClient` em no-op (`return-void`) — assim o paywall
   (redirect para a Play Store) e o dialog de erro nunca sobem, sem mexer na
   validação de assinatura do payload. Idempotente.
-- **16** localiza os splits ao lado do base, **verifica se todos compartilham o
+- **15** localiza os splits ao lado do base, **verifica se todos compartilham o
   mesmo certificado** (requisito do `adb install-multiple`), assina base patcheado
   + splits com a mesma keystore em `outputs/signed/` e instala o conjunto.
 
-O pipeline completo (10) integra os três passos: oferece o bypass quando detecta
+O pipeline completo (9) integra os três passos: oferece o bypass quando detecta
 proteção com bypass automático e, ao final, oferece assinar/instalar o conjunto de
 splits via `install-multiple`.
 

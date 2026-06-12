@@ -123,7 +123,7 @@ def install_split_set(state: AppState, *, replace: bool = True, uninstall_first:
     require_cmd("adb")
     apks = state.signed_split_apks
     if not apks:
-        raise ToolError("Assine o conjunto base+splits primeiro (opção 16).")
+        raise ToolError("Assine o conjunto base+splits primeiro (opção 15).")
 
     if uninstall_first:
         package = None

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
 import lzma
+import re
 import shutil
 import subprocess
 import urllib.error
@@ -10,9 +12,24 @@ from pathlib import Path
 
 from dexstrike.detector import KNOWN_ABIS, detect_abis
 from dexstrike.state import AppState
-from dexstrike.utils import ToolError, copy_file, ensure_dir, print_info, print_ok, print_warn, which
+from dexstrike.utils import (
+    ToolError,
+    check,
+    copy_file,
+    ensure_dir,
+    human_size,
+    print_info,
+    print_ok,
+    print_warn,
+    which,
+)
 
 GADGET_PORT = 27042
+
+# Nome do JS embutido ao lado do gadget no modo "script". É JS, mas nomeado
+# ``.so`` para que o instalador o extraia junto com as libs nativas — assim o
+# Gadget resolve o ``path`` relativo e roda o script sozinho no boot do app.
+SCRIPT_LIB_NAME = "libfridascript.so"
 
 
 def installed_frida_version() -> str | None:
@@ -161,23 +178,100 @@ def _decompress_xz(src: Path, dst: Path) -> None:
         ) from exc
 
 
-def write_gadget_config(lib_dir: Path, *, on_load: str = "resume") -> Path:
-    config = {
-        "interaction": {
-            "type": "listen",
-            "address": "127.0.0.1",
-            "port": 27042,
-            "on_load": on_load,
-        }
-    }
+def write_gadget_config(
+    lib_dir: Path,
+    *,
+    mode: str = "listen",
+    on_load: str = "resume",
+    script_name: str = SCRIPT_LIB_NAME,
+) -> Path:
+    """Escreve o ``libfrida-gadget.config.so``.
+
+    ``mode='listen'`` espera ``frida -U`` depois; ``mode='script'`` faz o Gadget
+    carregar e executar ``script_name`` sozinho no boot (autoload).
+    """
+    if mode == "script":
+        config = {"interaction": {"type": "script", "path": script_name, "on_change": "reload"}}
+    else:
+        config = {"interaction": {"type": "listen", "address": "127.0.0.1", "port": GADGET_PORT, "on_load": on_load}}
     path = lib_dir / "libfrida-gadget.config.so"
     path.write_text(json.dumps(config, indent=2), encoding="utf-8")
     return path
 
 
-def inject_frida_gadget(state: AppState, *, abis: list[str] | None = None, write_config: bool = True) -> list[Path]:
+def load_ca_pem(path: Path) -> str:
+    """Lê uma CA de ``path`` (PEM ou DER) e devolve o bloco PEM.
+
+    Aceita o arquivo exportado do Burp tanto em ``Certificate in PEM format``
+    quanto o ``cacert.der`` — converte DER → PEM sem dependências externas.
+    """
+    data = Path(path).expanduser().read_bytes()
+    text = data.decode("latin-1", errors="ignore")
+    begin, end = "-----BEGIN CERTIFICATE-----", "-----END CERTIFICATE-----"
+    if begin in text and end in text:
+        return text[text.index(begin): text.index(end) + len(end)]
+    # Assume DER: empacota como PEM.
+    b64 = base64.encodebytes(data).decode("ascii").strip()
+    return f"{begin}\n{b64}\n{end}"
+
+
+def render_config_js(
+    *,
+    ca_pem: str | None = None,
+    proxy_host: str = "127.0.0.1",
+    proxy_port: int = 8080,
+    debug: bool = False,
+) -> str:
+    """Devolve o ``config.js`` do httptoolkit com a CA do proxy e host/porta cravados."""
+    config_js = (ASSET_DIR / "config.js").read_text(encoding="utf-8")
+    if ca_pem:
+        config_js = re.sub(
+            r"const CERT_PEM = `[\s\S]*?`;",
+            "const CERT_PEM = `" + ca_pem.strip() + "`;",
+            config_js,
+            count=1,
+        )
+    config_js = re.sub(r"const PROXY_HOST = '[^']*';", f"const PROXY_HOST = '{proxy_host}';", config_js, count=1)
+    config_js = re.sub(r"const PROXY_PORT = \d+;", f"const PROXY_PORT = {proxy_port};", config_js, count=1)
+    if debug:
+        config_js = re.sub(r"const DEBUG_MODE = (?:true|false);", "const DEBUG_MODE = true;", config_js, count=1)
+    return config_js
+
+
+def build_unpinning_bundle(
+    *,
+    ca_pem: str | None = None,
+    proxy_host: str = "127.0.0.1",
+    proxy_port: int = 8080,
+    debug: bool = False,
+) -> str:
+    """Monta ``config.js`` + ``android-certificate-unpinning.js`` num único JS."""
+    config_js = render_config_js(ca_pem=ca_pem, proxy_host=proxy_host, proxy_port=proxy_port, debug=debug)
+    unpin_js = (ASSET_DIR / "android-certificate-unpinning.js").read_text(encoding="utf-8")
+    return config_js + "\n\n// ===== android-certificate-unpinning.js =====\n\n" + unpin_js
+
+
+def inject_frida_gadget(
+    state: AppState,
+    *,
+    abis: list[str] | None = None,
+    mode: str = "listen",
+    ca_pem: str | None = None,
+    proxy_host: str = "127.0.0.1",
+    proxy_port: int = 8080,
+    debug: bool = False,
+) -> list[Path]:
+    """Baixa e injeta o Frida Gadget em cada ABI.
+
+    ``mode='listen'`` (padrão): gadget escuta na 27042 (conecte com ``frida -U``).
+    ``mode='script'``: embute ``config.js``+``unpinning.js`` como ``libfridascript.so``
+    ao lado do gadget e configura o Gadget para rodar o script sozinho no boot
+    (autoload do SSL unpinning + redirect pro proxy, sem ``frida -U``).
+    """
     if not state.decoded_dir:
         raise ToolError("decoded_dir não configurado.")
+    if mode not in {"listen", "script"}:
+        raise ToolError(f"Modo de gadget inválido: {mode}")
 
     detected = detect_abis(state.decoded_dir)
     state.detected_abis = detected
@@ -188,6 +282,12 @@ def inject_frida_gadget(state: AppState, *, abis: list[str] | None = None, write
         raise ToolError("Nenhuma ABI selecionada para injeção do Frida Gadget.")
 
     warn_on_version_mismatch(state)
+
+    bundle = None
+    if mode == "script":
+        bundle = build_unpinning_bundle(
+            ca_pem=ca_pem, proxy_host=proxy_host, proxy_port=proxy_port, debug=debug
+        )
 
     installed: list[Path] = []
     for abi in abis:
@@ -201,41 +301,64 @@ def inject_frida_gadget(state: AppState, *, abis: list[str] | None = None, write
         _decompress_xz(downloaded, gadget_path)
         installed.append(gadget_path)
         state.log_patch(f"Frida Gadget {state.frida_version} injetado em `{gadget_path}`")
-        if write_config:
-            cfg = write_gadget_config(lib_dir)
-            state.log_patch(f"Config do Frida Gadget criada em `{cfg}`")
+
+        cfg = write_gadget_config(lib_dir, mode=mode)
+        if mode == "script":
+            assert bundle is not None
+            (lib_dir / SCRIPT_LIB_NAME).write_text(bundle, encoding="utf-8")
+        state.log_patch(f"Config do Frida Gadget ({mode}) criada em `{cfg}`")
+
+        _validate_gadget_injection(lib_dir, mode=mode)
 
     state.selected_abis = abis
-    print_ok("Frida Gadget injetado em: " + ", ".join(abis))
+    _write_outputs_scripts(state, ca_pem=ca_pem, proxy_host=proxy_host, proxy_port=proxy_port, debug=debug)
+
+    if mode == "script":
+        state.note("Gadget em modo SCRIPT (autoload): o unpinning roda sozinho no boot do app.")
+        state.note(f"Garanta o proxy: `adb reverse tcp:{proxy_port} tcp:{proxy_port}` (device -> seu Burp/proxy).")
+        if not ca_pem:
+            state.note("CERT_PEM não foi trocado — o proxy precisa usar a CA de exemplo, senão o TLS falha.")
+    else:
+        state.note("Gadget em modo LISTEN. Conecte com: `" + gadget_connect_hint() + "`")
+        state.note("Se o `-U` não achar o device, fallback: `" + gadget_connect_hint_remote() + "`")
+
+    print_ok(f"Frida Gadget ({mode}) injetado em: " + ", ".join(abis))
     return installed
 
 
-def copy_frida_scripts(state: AppState) -> None:
-    if not state.decoded_dir:
-        raise ToolError("decoded_dir não configurado.")
+def _validate_gadget_injection(lib_dir: Path, *, mode: str) -> None:
+    """Confere que o gadget (e o script, no modo script) ficaram no lugar certo."""
+    gadget = lib_dir / "libfrida-gadget.so"
+    cfg = lib_dir / "libfrida-gadget.config.so"
+    print_info(f"Validação da injeção em {lib_dir.name}:")
+    ok = check(gadget.exists() and gadget.stat().st_size > 1_000_000,
+               f"gadget.so OK ({human_size(gadget.stat().st_size) if gadget.exists() else '0'})",
+               "libfrida-gadget.so ausente ou pequeno demais")
+    ok = check(cfg.exists() and mode in cfg.read_text(encoding="utf-8"),
+               f"config.so OK (modo {mode})", "config do gadget ausente/errado") and ok
+    if mode == "script":
+        scr = lib_dir / SCRIPT_LIB_NAME
+        ok = check(scr.exists() and scr.stat().st_size > 1000,
+                   f"{SCRIPT_LIB_NAME} OK ({human_size(scr.stat().st_size) if scr.exists() else '0'})",
+                   f"{SCRIPT_LIB_NAME} (script JS) ausente") and ok
+    if not ok:
+        raise ToolError("Validação da injeção do gadget falhou.")
 
-    output_scripts = ensure_dir(state.output_dir / "frida-scripts")
-    decoded_assets = ensure_dir(state.decoded_dir / "assets" / "frida")
 
-    config_js = ASSET_DIR / "config.js"
-    unpin_js = ASSET_DIR / "android-certificate-unpinning.js"
-    if not config_js.exists() or not unpin_js.exists():
-        print_warn("Scripts Frida não encontrados em dexstrike/assets/frida.")
-        return
-
-    for src in [config_js, unpin_js]:
-        copy_file(src, output_scripts / src.name)
-        copy_file(src, decoded_assets / src.name)
-
-    bundle = output_scripts / "ssl-unpinning-bundle.js"
-    bundle.write_text(
-        config_js.read_text(encoding="utf-8")
-        + "\n\n// ---- android-certificate-unpinning.js ----\n\n"
-        + unpin_js.read_text(encoding="utf-8"),
-        encoding="utf-8",
-    )
-
-    state.log_patch("Scripts Frida copiados para `outputs/frida-scripts` e `assets/frida` dentro do APK descompilado")
-    state.note("Gadget em modo listen. Conecte com: `" + gadget_connect_hint() + "`")
-    state.note("Se o `-U` não achar o device, fallback: `" + gadget_connect_hint_remote() + "`")
-    print_ok("Scripts Frida copiados e bundle gerado.")
+def _write_outputs_scripts(
+    state: AppState,
+    *,
+    ca_pem: str | None,
+    proxy_host: str,
+    proxy_port: int,
+    debug: bool,
+) -> None:
+    """Grava os scripts (com CA/proxy aplicados) em ``outputs/frida-scripts`` para
+    referência e para uso com ``frida -U -l`` no modo listen."""
+    out = ensure_dir(state.output_dir / "frida-scripts")
+    copy_file(ASSET_DIR / "android-certificate-unpinning.js", out / "android-certificate-unpinning.js")
+    config_js = render_config_js(ca_pem=ca_pem, proxy_host=proxy_host, proxy_port=proxy_port, debug=debug)
+    (out / "config.js").write_text(config_js, encoding="utf-8")
+    bundle = build_unpinning_bundle(ca_pem=ca_pem, proxy_host=proxy_host, proxy_port=proxy_port, debug=debug)
+    (out / "ssl-unpinning-bundle.js").write_text(bundle, encoding="utf-8")
+    state.log_patch("Scripts Frida (config aplicado) gravados em `outputs/frida-scripts`")
